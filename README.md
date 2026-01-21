@@ -117,7 +117,8 @@ sl-newspaper-bias-analysis/
 │   ├── db.py              # Database operations
 │   ├── embeddings.py      # Embedding generation
 │   ├── topics.py          # Topic modeling
-│   └── clustering.py      # Event clustering
+│   ├── clustering.py      # Event clustering
+│   └── versions.py        # Result version management
 ├── scripts/
 │   ├── 01_generate_embeddings.py
 │   ├── 02_discover_topics.py

@@ -80,7 +80,7 @@ class Database:
             query += " AND source_id = %s"
             params.append(source_id)
 
-        query += " ORDER BY date_posted"
+        query += " ORDER BY date_posted, id"
 
         if limit:
             query += f" LIMIT {limit} OFFSET {offset}"
@@ -112,7 +112,7 @@ class Database:
                 WHERE e.id IS NULL
                   AND a.content IS NOT NULL
                   AND a.content != ''
-                ORDER BY a.date_posted
+                ORDER BY a.date_posted, a.id
             """
             params = [result_version_id]
         else:
@@ -123,7 +123,7 @@ class Database:
                 WHERE e.id IS NULL
                   AND a.content IS NOT NULL
                   AND a.content != ''
-                ORDER BY a.date_posted
+                ORDER BY a.date_posted, a.id
             """
             params = []
 
@@ -172,7 +172,7 @@ class Database:
                 FROM {schema}.embeddings e
                 JOIN {schema}.news_articles a ON e.article_id = a.id
                 WHERE e.result_version_id = %s
-                ORDER BY a.date_posted
+                ORDER BY a.date_posted, a.id
             """
             params = [result_version_id]
         else:
@@ -181,7 +181,7 @@ class Database:
                        a.date_posted, a.source_id
                 FROM {schema}.embeddings e
                 JOIN {schema}.news_articles a ON e.article_id = a.id
-                ORDER BY a.date_posted
+                ORDER BY a.date_posted, a.id
             """
             params = []
 
@@ -318,7 +318,7 @@ class Database:
             WHERE (aa.overall_tone IS NULL OR aa.article_type IS NULL)
               AND a.content IS NOT NULL
               AND a.content != ''
-            ORDER BY a.date_posted
+            ORDER BY a.date_posted, a.id
         """
         if limit:
             query += f" LIMIT {limit}"

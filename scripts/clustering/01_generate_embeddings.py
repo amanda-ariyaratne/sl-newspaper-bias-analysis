@@ -1,43 +1,49 @@
 #!/usr/bin/env python3
-"""Generate embeddings for all articles for a specific result version."""
+"""Generate embeddings for clustering analysis."""
 
 import sys
 import argparse
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.embeddings import generate_embeddings
-from src.versions import get_version_config, update_pipeline_status
-from src.db import get_db
+from src.versions import get_version, get_version_config, update_pipeline_status
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate embeddings for articles")
+    parser = argparse.ArgumentParser(description="Generate embeddings for clustering analysis")
     parser.add_argument(
         "--version-id",
         required=True,
-        help="UUID of the result version"
+        help="UUID of the clustering result version"
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=100,
-        help="Batch size for embedding generation (default: 100)"
+        default=1000,
+        help="Batch size for embedding generation (default: 1000)"
     )
     args = parser.parse_args()
 
-    # Get version configuration
-    version_config = get_version_config(args.version_id)
-    if not version_config:
+    # Get version and validate it's a clustering version
+    version = get_version(args.version_id)
+    if not version:
         print(f"Error: Version {args.version_id} not found")
         sys.exit(1)
 
-    # Extract parameters from config
+    if version["analysis_type"] != "clustering":
+        print(f"Error: Version {args.version_id} is not a clustering analysis version (type: {version['analysis_type']})")
+        print("Use scripts/clustering/ for clustering analysis versions only")
+        sys.exit(1)
+
+    # Get version configuration
+    version_config = get_version_config(args.version_id)
     embeddings_config = version_config.get("embeddings", {})
     random_seed = version_config.get("random_seed", 42)
 
-    print(f"\nGenerating embeddings for version: {args.version_id}")
+    print(f"\nGenerating embeddings for clustering analysis version: {version['name']}")
+    print(f"  Version ID: {args.version_id}")
     print(f"  Model: {embeddings_config.get('model', 'all-mpnet-base-v2')}")
     print(f"  Random seed: {random_seed}")
     print(f"  Batch size: {args.batch_size}\n")

@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Cluster articles into events for a specific result version."""
+"""Cluster articles into events for clustering analysis."""
 
 import sys
 import argparse
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.clustering import cluster_articles
-from src.versions import get_version_config, update_pipeline_status
-from src.db import get_db
+from src.versions import get_version, get_version_config, update_pipeline_status
 
 
 def main():
@@ -17,20 +16,29 @@ def main():
     parser.add_argument(
         "--version-id",
         required=True,
-        help="UUID of the result version"
+        help="UUID of the clustering result version"
     )
     args = parser.parse_args()
 
-    # Get version configuration
-    version_config = get_version_config(args.version_id)
-    if not version_config:
+    # Get version and validate it's a clustering version
+    version = get_version(args.version_id)
+    if not version:
         print(f"Error: Version {args.version_id} not found")
         sys.exit(1)
+
+    if version["analysis_type"] != "clustering":
+        print(f"Error: Version {args.version_id} is not a clustering analysis version (type: {version['analysis_type']})")
+        print("Use scripts/clustering/ for clustering analysis versions only")
+        sys.exit(1)
+
+    # Get version configuration
+    version_config = get_version_config(args.version_id)
 
     print("=" * 60)
     print("Event Clustering")
     print("=" * 60)
-    print(f"Version: {args.version_id}")
+    print(f"Version: {version['name']}")
+    print(f"Version ID: {args.version_id}")
     print()
 
     # Extract clustering configuration

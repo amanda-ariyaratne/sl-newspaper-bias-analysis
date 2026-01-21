@@ -57,7 +57,29 @@ If you're setting up this project for the first time:
 
    Import your scraped articles into this table.
 
-6. **Run the analysis pipeline** (see "Running the Pipeline" section below)
+6. **Create your first result versions**
+
+   Since topics and clustering are now independent, create separate versions:
+
+   ```bash
+   # Create a topic version
+   python3 -c "
+   from src.versions import create_version, get_default_topic_config
+   version_id = create_version('baseline-topics', 'Initial topic analysis', get_default_topic_config(), analysis_type='topics')
+   print(f'Topic version ID: {version_id}')
+   "
+
+   # Create a clustering version
+   python3 -c "
+   from src.versions import create_version, get_default_clustering_config
+   version_id = create_version('baseline-clustering', 'Initial clustering analysis', get_default_clustering_config(), analysis_type='clustering')
+   print(f'Clustering version ID: {version_id}')
+   "
+   ```
+
+   Or create versions via the dashboard (easier for beginners).
+
+7. **Run the analysis pipelines** (see "Running the Pipeline" section below)
 
 ### For Contributing to the Project
 
@@ -88,20 +110,24 @@ If you're contributing to an organization repository:
 ```
 database-analysis/
 ├── config.yaml              # Configuration (LLM, embeddings, clustering)
-├── schema.sql              # Database schema for analysis tables
+├── schema.sql              # Database schema (includes analysis_type for decoupled analyses)
 ├── requirements.txt        # Python dependencies
 ├── src/
 │   ├── db.py              # Database operations (PostgreSQL + pgvector)
 │   ├── llm.py             # LLM client abstraction (Claude/OpenAI/local)
 │   ├── embeddings.py      # Embedding generation (local/OpenAI)
 │   ├── topics.py          # BERTopic hierarchical topic modeling
-│   └── clustering.py      # Event clustering using embeddings
+│   ├── clustering.py      # Event clustering using embeddings
+│   └── versions.py        # Result version management (with analysis_type)
 ├── scripts/
-│   ├── 01_generate_embeddings.py  # Generate embeddings for all articles
-│   ├── 02_discover_topics.py      # Run BERTopic topic discovery
-│   └── 03_cluster_events.py       # Cluster articles into events
+│   ├── topics/            # Topic analysis pipeline
+│   │   ├── 01_generate_embeddings.py
+│   │   └── 02_discover_topics.py
+│   └── clustering/        # Event clustering pipeline
+│       ├── 01_generate_embeddings.py
+│       └── 02_cluster_events.py
 ├── dashboard/
-│   └── app.py             # Streamlit dashboard
+│   └── app.py             # Streamlit dashboard (separate version selectors per tab)
 └── models/
     └── bertopic_model/    # Saved BERTopic model
 ```
@@ -111,25 +137,33 @@ database-analysis/
 ### Original Data
 - `news_articles` - Scraped newspaper articles (8,365 articles)
 
+### Result Versioning
+- `result_versions` - Configuration-based version tracking for reproducible analysis
+  - **NEW:** `analysis_type` column distinguishes between 'topics', 'clustering', and 'combined' versions
+  - Topics and clustering are now **independent analyses** with separate versions
+  - Same version name can exist for both topics and clustering (e.g., "baseline-topics" and "baseline-clustering")
+
 ### Analysis Tables
 - `embeddings` - Article embeddings (768-dim vectors from all-mpnet-base-v2)
-- `topics` - Discovered topics (232 topics via BERTopic)
+- `topics` - Discovered topics (linked to topic versions)
 - `article_analysis` - Article-topic assignments
-- `event_clusters` - Event clusters (1,717 clusters)
+- `event_clusters` - Event clusters (linked to clustering versions)
 - `article_clusters` - Article-to-cluster mappings
 
-Note: All tables are created in the schema specified in your `config.yaml`.
+Note: All analysis tables are linked to `result_versions` for configuration tracking and reproducibility. Topics and clustering can now be run independently without interfering with each other.
 
 ## Current Status
 
 | Component | Status | Details |
 |-----------|--------|---------|
-| Embeddings | ✅ Complete | 8,365 articles embedded using local model |
-| Topic Discovery | ✅ Complete | 232 topics discovered, 6,455 articles categorized |
-| Event Clustering | ✅ Complete | 1,717 clusters, 5,399 articles clustered |
+| Architecture | ✅ Decoupled | Topics and clustering are independent analyses |
+| Result Versioning | ✅ Complete | Decoupled version management with analysis_type |
+| Topic Analysis | ✅ Complete | Independent pipeline with separate versions |
+| Event Clustering | ✅ Complete | Independent pipeline with separate versions |
+| Embeddings | ✅ Complete | Shared across both analyses (can use different models) |
 | Tone Analysis | ⏸️ Skipped | Requires LLM API (Claude/OpenAI) |
 | Article Type | ⏸️ Skipped | Requires LLM API |
-| Dashboard | ✅ Running | Streamlit app with 4 views |
+| Dashboard | ✅ Running | Streamlit app with per-tab version selectors |
 
 ## Key Findings
 
@@ -176,36 +210,89 @@ database:
 
 ### Running the Pipeline
 
-#### 1. Generate Embeddings
+**Important**: Topics and clustering are now **independent analyses** with separate pipelines. Each has its own version management.
+
+#### Architecture: Two Independent Pipelines
+
+```
+Topics Analysis              Clustering Analysis
+└── Topic Versions           └── Clustering Versions
+    ├── Embeddings               ├── Embeddings
+    └── Topic Discovery          └── Event Clustering
+```
+
+Both analyses depend on embeddings, but not on each other.
+
+#### Topic Analysis Pipeline
+
+**1. Create a Topic Version**
 ```bash
-python3 scripts/01_generate_embeddings.py
+# Via Python
+python3 -c "
+from src.versions import create_version, get_default_topic_config
+version_id = create_version('baseline-topics', 'Initial topic analysis', get_default_topic_config(), analysis_type='topics')
+print(f'Version ID: {version_id}')
+"
+```
+
+Or create via the dashboard (Topics tab → "➕ Create New Topics Version").
+
+**2. Generate Embeddings**
+```bash
+python3 scripts/topics/01_generate_embeddings.py --version-id <version-id>
 ```
 - Uses local `all-mpnet-base-v2` model (free, no API needed)
 - Takes ~30 minutes for 8,365 articles on CPU
 - Stores 768-dimensional vectors in PostgreSQL
 
-#### 2. Discover Topics
+**3. Discover Topics**
 ```bash
-python3 scripts/02_discover_topics.py
+# For reproducible results, set PYTHONHASHSEED
+PYTHONHASHSEED=42 python3 scripts/topics/02_discover_topics.py --version-id <version-id>
 ```
 - Uses BERTopic with UMAP + HDBSCAN clustering
 - Discovers topics automatically from data
 - Generates keyword-based topic labels
 - Takes ~2-3 minutes
+- **Reproducible**: Set `PYTHONHASHSEED=42` to ensure identical results across runs with the same configuration
 
-#### 3. Cluster Events
+#### Event Clustering Pipeline
+
+**1. Create a Clustering Version**
 ```bash
-python3 scripts/03_cluster_events.py
+# Via Python
+python3 -c "
+from src.versions import create_version, get_default_clustering_config
+version_id = create_version('baseline-clustering', 'Initial clustering analysis', get_default_clustering_config(), analysis_type='clustering')
+print(f'Version ID: {version_id}')
+"
+```
+
+Or create via the dashboard (Events tab → "➕ Create New Clustering Version").
+
+**2. Generate Embeddings**
+```bash
+python3 scripts/clustering/01_generate_embeddings.py --version-id <version-id>
+```
+- Same embedding process as topics
+- Can use different embedding models if needed
+
+**3. Cluster Events**
+```bash
+python3 scripts/clustering/02_cluster_events.py --version-id <version-id>
 ```
 - Groups similar articles using cosine similarity (threshold: 0.8)
 - Applies 7-day time window constraint
 - Takes ~10 minutes
 
-#### 4. Run Dashboard
+#### Run Dashboard
 ```bash
 streamlit run dashboard/app.py
 ```
 - Access at: http://localhost:8501
+- **Topics tab**: Select topic version independently
+- **Events tab**: Select clustering version independently
+- Each tab manages its own versions
 - Auto-refreshes when code changes
 
 ### Sharing the Dashboard
@@ -223,26 +310,141 @@ ssh -L 8501:localhost:8501 amanda@server-ip
 # Provides a public https:// URL
 ```
 
+## Result Versioning System
+
+The project supports **decoupled result versioning** for reproducible analysis. Topics and clustering are now independent analyses with separate version management.
+
+### Key Concepts
+
+- **Analysis Types**: Each version has an `analysis_type` - either 'topics', 'clustering', or 'combined' (legacy)
+- **Independence**: Topic and clustering versions don't interfere with each other
+- **Same Names OK**: You can have "baseline" for topics AND "baseline" for clustering
+- **Separate Configurations**: Topic versions only track topic/embedding config, clustering versions only track clustering/embedding config
+
+### Why Decoupled Versions?
+
+- **Independence**: Change topic parameters without re-running clustering (and vice versa)
+- **Efficiency**: No wasted computation - only re-run what actually changed
+- **Clarity**: Each analysis has its own versions, making experiments easier to track
+- **Reproducibility**: Still tracks exactly which configuration produced which results
+
+### Creating Versions
+
+**Option 1: Via Dashboard**
+
+**Topics Tab:**
+1. Click "➕ Create New Topics Version"
+2. Enter a name (e.g., "baseline", "small-topics")
+3. Optionally add a description
+4. Edit the JSON configuration (only embeddings + topics)
+5. Click "Create Version"
+
+**Events Tab:**
+1. Click "➕ Create New Clustering Version"
+2. Enter a name (e.g., "baseline", "high-similarity")
+3. Optionally add a description
+4. Edit the JSON configuration (only embeddings + clustering)
+5. Click "Create Version"
+
+**Option 2: Programmatically**
+
+**For Topics:**
+```python
+from src.versions import create_version, get_default_topic_config
+
+config = get_default_topic_config()
+config['topics']['min_topic_size'] = 15  # Modify as needed
+
+version_id = create_version(
+    name="small-topics",
+    description="Smaller topic size for more granular categorization",
+    configuration=config,
+    analysis_type='topics'
+)
+print(f"Created version: {version_id}")
+```
+
+**For Clustering:**
+```python
+from src.versions import create_version, get_default_clustering_config
+
+config = get_default_clustering_config()
+config['clustering']['similarity_threshold'] = 0.85  # Modify as needed
+
+version_id = create_version(
+    name="high-similarity",
+    description="Testing stricter clustering with 0.85 threshold",
+    configuration=config,
+    analysis_type='clustering'
+)
+print(f"Created version: {version_id}")
+```
+
+### Running Pipeline for a Version
+
+After creating a version, run the appropriate pipeline:
+
+**For Topic Versions:**
+```bash
+python3 scripts/topics/01_generate_embeddings.py --version-id <version-id>
+python3 scripts/topics/02_discover_topics.py --version-id <version-id>
+```
+
+**For Clustering Versions:**
+```bash
+python3 scripts/clustering/01_generate_embeddings.py --version-id <version-id>
+python3 scripts/clustering/02_cluster_events.py --version-id <version-id>
+```
+
+The dashboard automatically detects versions and shows pipeline completion status in each tab.
+
+### Version Configuration
+
+**Topic Versions Track:**
+- `random_seed`: Ensures reproducible topic modeling
+- `embeddings.model`: Embedding model used
+- `topics.min_topic_size`: Minimum articles per topic
+- `topics.diversity`: Keyword diversity in topic labels
+- `topics.umap` & `topics.hdbscan`: UMAP/HDBSCAN parameters
+
+**Clustering Versions Track:**
+- `random_seed`: Ensures reproducible clustering
+- `embeddings.model`: Embedding model used
+- `clustering.similarity_threshold`: Cosine similarity threshold for event clustering
+- `clustering.time_window_days`: Time constraint for clustering
+- `clustering.min_cluster_size`: Minimum articles per cluster
+
+### Best Practices
+
+1. **Baseline versions first**: Create a "baseline" version for both topics and clustering with default settings
+2. **Descriptive names**: Use names that explain what changed (e.g., "small-topics", "high-similarity-clustering")
+3. **One parameter at a time**: When experimenting, change one parameter per version for clear comparisons
+4. **Document reasoning**: Use the description field to explain why you're testing these parameters
+5. **Independent experimentation**: Feel free to create multiple topic versions without worrying about clustering (and vice versa)
+
 ## Dashboard Features
 
 ### 📊 Coverage Tab
+- **Version-independent** - shows all articles in the database
 - Article volume by source (bar chart)
 - Coverage timeline (daily article counts)
 
 ### 🏷️ Topics Tab
+- **Independent version selector** - select from topic versions only
+- Create new topic versions directly in the tab
 - Top 20 topics by article count
 - Topic-source heatmap showing coverage distribution
-- Identifies which sources focus on which topics
+- Topic focus comparison across sources
+- Selection bias indicators (topics with highest coverage variance)
+- Interactive BERTopic visualizations (topic similarity map, hierarchical clustering)
 
 ### 📰 Events Tab
+- **Independent version selector** - select from clustering versions only
+- Create new clustering versions directly in the tab
 - Browse top event clusters
 - See which sources covered each event
 - View all articles in an event cluster
-
-### ⚖️ Source Comparison Tab
-- Topic focus comparison across sources
-- Selection bias indicators
-- Coverage variance analysis
+- Multi-source event analysis
 
 ## Configuration
 

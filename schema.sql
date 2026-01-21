@@ -8,14 +8,19 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- Result versions for configuration-based analysis
 CREATE TABLE IF NOT EXISTS media_bias.result_versions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(255) NOT NULL UNIQUE,
+    name VARCHAR(255) NOT NULL,
     description TEXT,
     configuration JSONB NOT NULL,
+    analysis_type VARCHAR(50) NOT NULL DEFAULT 'combined',
     is_complete BOOLEAN DEFAULT false,
     pipeline_status JSONB DEFAULT '{"embeddings": false, "topics": false, "clustering": false}'::jsonb,
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT result_versions_name_analysis_type_key UNIQUE (name, analysis_type)
 );
+
+COMMENT ON COLUMN media_bias.result_versions.analysis_type IS
+  'Type of analysis: ''topics'' for topic discovery, ''clustering'' for event clustering, ''combined'' for legacy versions';
 
 -- Topics discovered via BERTopic
 CREATE TABLE IF NOT EXISTS media_bias.topics (

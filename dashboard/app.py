@@ -3,11 +3,9 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import sys
 import json
 from pathlib import Path
-from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -17,7 +15,8 @@ from src.versions import (
     get_version,
     create_version,
     find_version_by_config,
-    get_default_config
+    get_default_topic_config,
+    get_default_clustering_config
 )
 from bertopic import BERTopic
 
@@ -222,91 +221,151 @@ def load_bertopic_model(version_id=None):
     return None
 
 
-def render_version_sidebar():
-    """Render version selection and management in sidebar."""
-    st.sidebar.header("📊 Result Version")
+def render_version_selector(analysis_type):
+    """Render version selector for a specific analysis type.
 
-    # Load available versions
-    versions = list_versions()
+    Args:
+        analysis_type: 'topics' or 'clustering'
+
+    Returns:
+        version_id of selected version or None
+    """
+    # Load versions for this analysis type
+    versions = list_versions(analysis_type=analysis_type)
 
     if not versions:
-        st.sidebar.warning("No result versions found!")
-        st.sidebar.markdown("Run the pipeline to create a version:")
-        st.sidebar.code("python3 scripts/run_pipeline.py --name baseline")
+        st.warning(f"No {analysis_type} versions found!")
+        st.info(f"Create a {analysis_type} version using the button below to get started")
         return None
 
     # Version selector
     version_options = {
-        f"{v['name']}": v['id']
+        f"{v['name']} ({v['created_at'].strftime('%Y-%m-%d')})": v['id']
         for v in versions
     }
 
-    selected_name = st.sidebar.selectbox(
-        "Select Version",
+    selected_label = st.selectbox(
+        f"Select {analysis_type.capitalize()} Version",
         options=list(version_options.keys()),
-        index=0
+        index=0,
+        key=f"{analysis_type}_version_selector"
     )
 
-    version_id = version_options[selected_name]
+    version_id = version_options[selected_label]
     version = get_version(version_id)
 
-    # Display version info
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**Version Info**")
-    st.sidebar.caption(f"**Name:** {version['name']}")
-    if version['description']:
-        st.sidebar.caption(f"**Description:** {version['description']}")
-    st.sidebar.caption(f"**Created:** {version['created_at'].strftime('%Y-%m-%d %H:%M')}")
+    # Display version info in an expander
+    with st.expander("ℹ️ Version Details"):
+        st.markdown(f"**Name:** {version['name']}")
+        if version['description']:
+            st.markdown(f"**Description:** {version['description']}")
+        st.markdown(f"**Created:** {version['created_at'].strftime('%Y-%m-%d %H:%M')}")
 
-    # Pipeline status
-    status = version['pipeline_status']
-    st.sidebar.markdown("**Pipeline Status:**")
-    st.sidebar.caption(f"{'✅' if status.get('embeddings') else '⭕'} Embeddings")
-    st.sidebar.caption(f"{'✅' if status.get('topics') else '⭕'} Topics")
-    st.sidebar.caption(f"{'✅' if status.get('clustering') else '⭕'} Clustering")
+        # Pipeline status
+        status = version['pipeline_status']
+        st.markdown("**Pipeline Status:**")
+        cols = st.columns(2 if analysis_type == 'topics' else 2)
 
-    if version['is_complete']:
-        st.sidebar.success("Complete")
-    else:
-        st.sidebar.warning("Incomplete")
+        with cols[0]:
+            st.caption(f"{'✅' if status.get('embeddings') else '⭕'} Embeddings")
+        with cols[1]:
+            if analysis_type == 'topics':
+                st.caption(f"{'✅' if status.get('topics') else '⭕'} Topics")
+            else:
+                st.caption(f"{'✅' if status.get('clustering') else '⭕'} Clustering")
 
-    # Configuration preview
-    with st.sidebar.expander("⚙️ Configuration"):
+        # Configuration preview
         config = version['configuration']
-        st.caption(f"**Random Seed:** {config.get('random_seed', 42)}")
-        st.caption(f"**Embedding Model:** {config.get('embeddings', {}).get('model', 'N/A')}")
-        st.caption(f"**Min Topic Size:** {config.get('topics', {}).get('min_topic_size', 'N/A')}")
-        st.caption(f"**Similarity Threshold:** {config.get('clustering', {}).get('similarity_threshold', 'N/A')}")
+        st.markdown("**Configuration:**")
 
-        if st.button("View Full Config"):
-            st.json(config)
+        # General settings
+        st.caption(f"Random Seed: {config.get('random_seed', 42)}")
+        st.caption(f"Embedding Model: {config.get('embeddings', {}).get('model', 'N/A')}")
 
-    # Create new version button
-    st.sidebar.markdown("---")
-    if st.sidebar.button("➕ Create New Version"):
-        st.session_state.show_create_version = True
+        if analysis_type == 'topics':
+            # Topic-specific settings
+            topics_config = config.get('topics', {})
+            st.caption(f"Min Topic Size: {topics_config.get('min_topic_size', 'N/A')}")
+            st.caption(f"Diversity: {topics_config.get('diversity', 'N/A')}")
+
+            # Stopwords
+            stopwords = topics_config.get('stop_words', [])
+            if stopwords:
+                st.caption(f"Stop Words: {', '.join(stopwords)}")
+
+            # Vectorizer parameters
+            vectorizer_config = topics_config.get('vectorizer', {})
+            if vectorizer_config:
+                ngram_range = vectorizer_config.get('ngram_range', 'N/A')
+                st.caption(f"N-gram Range: {ngram_range}")
+                st.caption(f"Min DF: {vectorizer_config.get('min_df', 'N/A')}")
+
+            # UMAP parameters
+            umap_config = topics_config.get('umap', {})
+            if umap_config:
+                st.caption(f"UMAP n_neighbors: {umap_config.get('n_neighbors', 'N/A')}")
+                st.caption(f"UMAP n_components: {umap_config.get('n_components', 'N/A')}")
+                st.caption(f"UMAP min_dist: {umap_config.get('min_dist', 'N/A')}")
+                st.caption(f"UMAP metric: {umap_config.get('metric', 'N/A')}")
+
+            # HDBSCAN parameters
+            hdbscan_config = topics_config.get('hdbscan', {})
+            if hdbscan_config:
+                st.caption(f"HDBSCAN min_cluster_size: {hdbscan_config.get('min_cluster_size', 'N/A')}")
+                st.caption(f"HDBSCAN metric: {hdbscan_config.get('metric', 'N/A')}")
+                st.caption(f"HDBSCAN cluster_selection_method: {hdbscan_config.get('cluster_selection_method', 'N/A')}")
+        else:
+            # Clustering-specific settings
+            clustering_config = config.get('clustering', {})
+            st.caption(f"Similarity Threshold: {clustering_config.get('similarity_threshold', 'N/A')}")
+            st.caption(f"Time Window: {clustering_config.get('time_window_days', 'N/A')} days")
+            st.caption(f"Min Cluster Size: {clustering_config.get('min_cluster_size', 'N/A')}")
 
     return version_id
 
 
-def render_create_version_dialog():
-    """Render dialog for creating a new version."""
-    st.header("Create New Result Version")
+def render_create_version_button(analysis_type):
+    """Render button to create a new version for a specific analysis type.
 
-    with st.form("create_version_form"):
-        name = st.text_input("Version Name", placeholder="e.g., no-location-stopwords")
-        description = st.text_area("Description (optional)", placeholder="What makes this version different?")
+    Args:
+        analysis_type: 'topics' or 'clustering'
+    """
+    if st.button(f"➕ Create New {analysis_type.capitalize()} Version", key=f"create_{analysis_type}_btn"):
+        st.session_state[f'show_create_{analysis_type}'] = True
+
+    # Show create dialog if requested
+    if st.session_state.get(f'show_create_{analysis_type}', False):
+        render_create_version_form(analysis_type)
+
+
+def render_create_version_form(analysis_type):
+    """Render form for creating a new version.
+
+    Args:
+        analysis_type: 'topics' or 'clustering'
+    """
+    st.markdown("---")
+    st.subheader(f"Create New {analysis_type.capitalize()} Version")
+
+    with st.form(f"create_{analysis_type}_form"):
+        name = st.text_input("Version Name", placeholder=f"e.g., baseline-{analysis_type}")
+        description = st.text_area("Description (optional)", placeholder="What makes this version unique?")
 
         # Configuration editor
         st.markdown("**Configuration (JSON)**")
-        default_config = get_default_config()
+        if analysis_type == 'topics':
+            default_config = get_default_topic_config()
+        else:
+            default_config = get_default_clustering_config()
+
         config_str = st.text_area(
             "Edit configuration",
             value=json.dumps(default_config, indent=2),
-            height=400
+            height=300,
+            key=f"{analysis_type}_config_editor"
         )
 
-        col1, col2, col3 = st.columns([1, 1, 2])
+        col1, col2 = st.columns(2)
 
         with col1:
             submit = st.form_submit_button("Create Version")
@@ -314,7 +373,7 @@ def render_create_version_dialog():
             cancel = st.form_submit_button("Cancel")
 
         if cancel:
-            st.session_state.show_create_version = False
+            st.session_state[f'show_create_{analysis_type}'] = False
             st.rerun()
 
         if submit:
@@ -325,21 +384,27 @@ def render_create_version_dialog():
                     # Parse configuration
                     config = json.loads(config_str)
 
-                    # Check if config already exists
-                    existing = find_version_by_config(config)
+                    # Check if config already exists for this analysis type
+                    existing = find_version_by_config(config, analysis_type=analysis_type)
                     if existing:
-                        st.warning(f"A version with this configuration already exists: **{existing['name']}**")
+                        st.warning(f"A {analysis_type} version with this configuration already exists: **{existing['name']}**")
                         st.info(f"Version ID: {existing['id']}")
                     else:
                         # Create version
-                        version_id = create_version(name, description, config)
-                        st.success(f"✅ Created version: {name}")
+                        version_id = create_version(name, description, config, analysis_type=analysis_type)
+                        st.success(f"✅ Created {analysis_type} version: {name}")
                         st.info(f"Version ID: {version_id}")
-                        st.markdown("**Next step:** Run the pipeline")
-                        st.code(f"python3 scripts/run_pipeline.py --version-id {version_id}")
+
+                        # Show pipeline instructions
+                        st.markdown("**Next steps:** Run the pipeline")
+                        st.code(f"""# Generate embeddings
+python3 scripts/{analysis_type}/01_generate_embeddings.py --version-id {version_id}
+
+# Run analysis
+python3 scripts/{analysis_type}/02_{'discover_topics' if analysis_type == 'topics' else 'cluster_events'}.py --version-id {version_id}""")
 
                         # Hide dialog
-                        st.session_state.show_create_version = False
+                        st.session_state[f'show_create_{analysis_type}'] = False
 
                 except json.JSONDecodeError as e:
                     st.error(f"Invalid JSON configuration: {e}")
@@ -351,47 +416,24 @@ def main():
     st.title("🇱🇰 Sri Lanka Media Bias Detector")
     st.markdown("Analyzing coverage patterns across Sri Lankan English newspapers")
 
-    # Initialize session state
-    if 'show_create_version' not in st.session_state:
-        st.session_state.show_create_version = False
+    # Initialize session state for tabs
+    if 'active_tab' not in st.session_state:
+        st.session_state.active_tab = 0
 
-    # Render version selector in sidebar
-    version_id = render_version_sidebar()
-
-    # Show create version dialog if requested
-    if st.session_state.get('show_create_version', False):
-        render_create_version_dialog()
-        return
-
-    # Check if version is selected
-    if not version_id:
-        st.info("Please select or create a result version to view dashboard")
-        return
-
-    # Load data for selected version
-    stats = load_overview_stats(version_id)
+    # Load overview stats (no version required for coverage)
+    stats = load_overview_stats()
 
     # Overview metrics
     st.header("Overview")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2 = st.columns(2)
 
     with col1:
         st.metric("Total Articles", f"{stats['total_articles']:,}")
     with col2:
-        st.metric("Topics Discovered", stats['total_topics'])
-    with col3:
-        st.metric("Event Clusters", f"{stats['total_clusters']:,}")
-    with col4:
-        st.metric("Multi-Source Events", f"{stats['multi_source_clusters']:,}")
-
-    if stats['date_range']['min_date']:
-        st.caption(f"Date range: {stats['date_range']['min_date']} to {stats['date_range']['max_date']}")
+        if stats['date_range']['min_date']:
+            st.caption(f"**Date range:** {stats['date_range']['min_date']} to {stats['date_range']['max_date']}")
 
     st.divider()
-
-    # Initialize session state for active tab
-    if 'active_tab' not in st.session_state:
-        st.session_state.active_tab = 0
 
     # Tabs for different views
     tab_names = ["📊 Coverage", "🏷️ Topics", "📰 Events"]
@@ -410,9 +452,9 @@ def main():
     if st.session_state.active_tab == 0:
         render_coverage_tab(stats)
     elif st.session_state.active_tab == 1:
-        render_topics_tab(version_id)
+        render_topics_tab()
     elif st.session_state.active_tab == 2:
-        render_events_tab(version_id)
+        render_events_tab()
 
 
 def render_coverage_tab(stats):
@@ -454,13 +496,26 @@ def render_coverage_tab(stats):
         st.plotly_chart(fig, use_container_width=True)
 
 
-def render_topics_tab(version_id):
+def render_topics_tab():
     """Render topics analysis and source comparison tab."""
-    st.subheader("Discovered Topics")
+    st.subheader("📊 Topic Analysis")
+
+    # Version selector at the top
+    version_id = render_version_selector('topics')
+
+    # Create version button
+    render_create_version_button('topics')
+
+    if not version_id:
+        return
+
+    st.markdown("---")
 
     topics = load_topics(version_id)
     if not topics:
         st.warning("No topics found for this version. Run topic discovery first.")
+        st.code(f"""python3 scripts/topics/01_generate_embeddings.py --version-id {version_id}
+python3 scripts/topics/02_discover_topics.py --version-id {version_id}""")
         return
 
     topics_df = pd.DataFrame(topics)
@@ -504,19 +559,41 @@ def render_topics_tab(version_id):
 
     # Source comparison section
     st.divider()
-    st.subheader("Source Comparison")
-    st.markdown("Compare how different sources prioritize topics")
 
     # Topic coverage comparison
     st.markdown("### Topic Focus by Source")
     st.markdown("What percentage of each source's coverage goes to each topic?")
 
     if topic_source_data:
+        # Initialize session state for topic pagination
+        if 'topic_focus_page' not in st.session_state:
+            st.session_state.topic_focus_page = 0
+
         # Calculate percentages per source
         source_totals = ts_df.groupby('source_name')['count'].sum()
 
-        # Get top 10 topics
-        top_topic_names_comparison = [t['name'] for t in topics[:10]]
+        # Get all topics (we'll paginate through them)
+        topics_per_page = 10
+        total_topics = len(topics)
+        max_page = (total_topics - 1) // topics_per_page
+
+        # Navigation buttons
+        col1, col2, col3 = st.columns([1, 3, 1])
+        with col1:
+            if st.button("← Previous", disabled=st.session_state.topic_focus_page == 0, key="prev_topics"):
+                st.session_state.topic_focus_page = max(0, st.session_state.topic_focus_page - 1)
+                st.rerun()
+        with col2:
+            st.caption(f"Showing topics {st.session_state.topic_focus_page * topics_per_page + 1}-{min((st.session_state.topic_focus_page + 1) * topics_per_page, total_topics)} of {total_topics}")
+        with col3:
+            if st.button("Next →", disabled=st.session_state.topic_focus_page >= max_page, key="next_topics"):
+                st.session_state.topic_focus_page = min(max_page, st.session_state.topic_focus_page + 1)
+                st.rerun()
+
+        # Get topics for current page
+        start_idx = st.session_state.topic_focus_page * topics_per_page
+        end_idx = start_idx + topics_per_page
+        top_topic_names_comparison = [t['name'] for t in topics[start_idx:end_idx]]
 
         comparison_data = []
         for source in SOURCE_NAMES.values():
@@ -527,7 +604,7 @@ def render_topics_tab(version_id):
                 topic_count = source_data[source_data['topic'] == topic]['count'].sum()
                 comparison_data.append({
                     'Source': source,
-                    'Topic': topic[:30],
+                    'Topic': topic,
                     'Percentage': (topic_count / total) * 100
                 })
 
@@ -542,20 +619,24 @@ def render_topics_tab(version_id):
             color_discrete_map=SOURCE_COLORS,
             labels={'Percentage': '% of Coverage'}
         )
-        fig.update_layout(height=500, xaxis_tickangle=-45)
+        fig.update_layout(
+            height=500,
+            xaxis_tickangle=-45,
+            xaxis=dict(tickfont=dict(size=14))  # Increased font size from default (~12) to 14
+        )
         st.plotly_chart(fig, use_container_width=True)
 
-        # Selection bias indicator
-        st.markdown("### Selection Bias Indicators")
-        st.markdown("Topics where sources significantly differ in coverage")
+        # # Selection bias indicator
+        # st.markdown("### Selection Bias Indicators")
+        # st.markdown("Topics where sources significantly differ in coverage")
 
         # Calculate variance in coverage percentage across sources
         variance_data = []
         for topic in top_topic_names_comparison:
-            topic_data = comp_df[comp_df['Topic'] == topic[:30]]
+            topic_data = comp_df[comp_df['Topic'] == topic]
             if len(topic_data) > 1:
                 variance_data.append({
-                    'Topic': topic[:30],
+                    'Topic': topic,
                     'Coverage Variance': topic_data['Percentage'].var(),
                     'Max Coverage': topic_data['Percentage'].max(),
                     'Min Coverage': topic_data['Percentage'].min(),
@@ -564,19 +645,19 @@ def render_topics_tab(version_id):
 
         var_df = pd.DataFrame(variance_data).sort_values('Range', ascending=False)
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**Highest Variation (potential selection bias)**")
-            st.dataframe(
-                var_df.head(5)[['Topic', 'Range']].rename(columns={'Range': 'Coverage Gap (%)'}),
-                use_container_width=True
-            )
-        with col2:
-            st.markdown("**Most Consistent Coverage**")
-            st.dataframe(
-                var_df.tail(5)[['Topic', 'Range']].rename(columns={'Range': 'Coverage Gap (%)'}),
-                use_container_width=True
-            )
+        # col1, col2 = st.columns(2)
+        # with col1:
+        #     st.markdown("**Highest Variation (potential selection bias)**")
+        #     st.dataframe(
+        #         var_df.head(5)[['Topic', 'Range']].rename(columns={'Range': 'Coverage Gap (%)'}),
+        #         use_container_width=True
+        #     )
+        # with col2:
+        #     st.markdown("**Most Consistent Coverage**")
+        #     st.dataframe(
+        #         var_df.tail(5)[['Topic', 'Range']].rename(columns={'Range': 'Coverage Gap (%)'}),
+        #         use_container_width=True
+        #     )
 
     # BERTopic Visualizations
     st.divider()
@@ -625,17 +706,29 @@ def render_topics_tab(version_id):
         except Exception as e:
             st.error(f"Error generating visualization: {e}")
     else:
-        st.info("BERTopic model not found. Run `python3 scripts/02_discover_topics.py` to generate the model.")
+        st.info("BERTopic model not found. Save the model during topic discovery.")
 
 
-def render_events_tab(version_id):
+def render_events_tab():
     """Render events analysis tab."""
-    st.subheader("Top Event Clusters")
-    st.markdown("Events covered by multiple sources - useful for comparing coverage")
+    st.subheader("📰 Event Clustering Analysis")
+
+    # Version selector at the top
+    version_id = render_version_selector('clustering')
+
+    # Create version button
+    render_create_version_button('clustering')
+
+    if not version_id:
+        return
+
+    st.markdown("---")
 
     events = load_top_events(version_id, 30)
     if not events:
         st.warning("No event clusters found for this version. Run clustering first.")
+        st.code(f"""python3 scripts/clustering/01_generate_embeddings.py --version-id {version_id}
+python3 scripts/clustering/02_cluster_events.py --version-id {version_id}""")
         return
 
     events_df = pd.DataFrame(events)

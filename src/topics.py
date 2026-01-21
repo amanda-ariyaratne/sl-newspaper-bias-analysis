@@ -30,6 +30,7 @@ class TopicModeler:
         vectorizer_params: Dict = None
     ):
         # Set random seeds for reproducibility
+        # Note: PYTHONHASHSEED must be set before Python starts (see script header)
         random.seed(random_seed)
         np.random.seed(random_seed)
 
@@ -56,7 +57,8 @@ class TopicModeler:
             "min_cluster_size": min_topic_size,
             "metric": "euclidean",
             "cluster_selection_method": "eom",
-            "prediction_data": True
+            "prediction_data": True,
+            "core_dist_n_jobs": 1  # Force single-threaded for reproducibility
         }
         if hdbscan_params:
             hdbscan_defaults.update(hdbscan_params)
@@ -69,7 +71,7 @@ class TopicModeler:
         if stop_words is None:
             stop_words = []
 
-        custom_stop_words = list(set(ENGLISH_STOP_WORDS) | set(stop_words))
+        custom_stop_words = sorted(set(ENGLISH_STOP_WORDS) | set(stop_words))
 
         vectorizer_defaults = {
             "ngram_range": (1, 3),
@@ -296,5 +298,5 @@ def discover_topics(
 
 
 if __name__ == "__main__":
-    print("Please use scripts/02_discover_topics.py instead.")
-    print("Usage: python3 scripts/02_discover_topics.py --version-id <uuid>")
+    print("Please use scripts/topics/02_discover_topics.py instead.")
+    print("Usage: python3 scripts/topics/02_discover_topics.py --version-id <uuid>")

@@ -38,7 +38,8 @@ def get_default_config() -> Dict[str, Any]:
             "hdbscan": {
                 "min_cluster_size": config["topics"]["min_topic_size"],
                 "metric": "euclidean",
-                "cluster_selection_method": "eom"
+                "cluster_selection_method": "eom",
+                "core_dist_n_jobs": 1
             },
             "vectorizer": {
                 "ngram_range": [1, 3],
@@ -53,50 +54,124 @@ def get_default_config() -> Dict[str, Any]:
     }
 
 
+def get_default_topic_config() -> Dict[str, Any]:
+    """
+    Get default configuration for topic analysis.
+
+    Returns:
+        Dictionary with configuration for embeddings and topics only.
+    """
+    config = load_config()
+
+    return {
+        "random_seed": 42,
+        "embeddings": {
+            "provider": config["embeddings"]["provider"],
+            "model": config["embeddings"]["model"],
+            "dimensions": config["embeddings"]["dimensions"]
+        },
+        "topics": {
+            "min_topic_size": config["topics"]["min_topic_size"],
+            "diversity": config["topics"].get("diversity", 0.5),
+            "nr_topics": None,
+            "stop_words": ["sri", "lanka", "lankan"],
+            "embedding_model": config["embeddings"]["model"],
+            "random_seed": 42,
+            "umap": {
+                "n_neighbors": 15,
+                "n_components": 5,
+                "min_dist": 0.0,
+                "metric": "cosine",
+                "random_state": 42
+            },
+            "hdbscan": {
+                "min_cluster_size": config["topics"]["min_topic_size"],
+                "metric": "euclidean",
+                "cluster_selection_method": "eom",
+                "core_dist_n_jobs": 1
+            },
+            "vectorizer": {
+                "ngram_range": [1, 3],
+                "min_df": 5
+            }
+        }
+    }
+
+
+def get_default_clustering_config() -> Dict[str, Any]:
+    """
+    Get default configuration for clustering analysis.
+
+    Returns:
+        Dictionary with configuration for embeddings and clustering only.
+    """
+    config = load_config()
+
+    return {
+        "random_seed": 42,
+        "embeddings": {
+            "provider": config["embeddings"]["provider"],
+            "model": config["embeddings"]["model"],
+            "dimensions": config["embeddings"]["dimensions"]
+        },
+        "clustering": {
+            "similarity_threshold": config["clustering"]["similarity_threshold"],
+            "time_window_days": config["clustering"]["time_window_days"],
+            "min_cluster_size": config["clustering"]["min_cluster_size"]
+        }
+    }
+
+
 def create_version(
     name: str,
     description: str = "",
-    configuration: Optional[Dict[str, Any]] = None
+    configuration: Optional[Dict[str, Any]] = None,
+    analysis_type: str = 'combined'
 ) -> str:
     """
     Create a new result version.
 
     Args:
-        name: Unique name for this version
+        name: Unique name for this version (can be same across different analysis types)
         description: Optional description of this version
         configuration: Configuration dictionary (uses default if not provided)
+        analysis_type: Type of analysis ('topics', 'clustering', or 'combined')
 
     Returns:
         UUID of the created version
 
     Raises:
-        ValueError: If version name already exists
+        ValueError: If version name already exists for the same analysis type
     """
+    valid_types = ['topics', 'clustering', 'combined']
+    if analysis_type not in valid_types:
+        raise ValueError(f"Invalid analysis_type: {analysis_type}. Must be one of {valid_types}")
+
     if configuration is None:
         configuration = get_default_config()
 
     with Database() as db:
         schema = db.config["schema"]
 
-        # Check if name already exists
+        # Check if name already exists for this analysis type
         with db.cursor() as cur:
             cur.execute(
-                f"SELECT id FROM {schema}.result_versions WHERE name = %s",
-                (name,)
+                f"SELECT id FROM {schema}.result_versions WHERE name = %s AND analysis_type = %s",
+                (name, analysis_type)
             )
             if cur.fetchone():
-                raise ValueError(f"Version with name '{name}' already exists")
+                raise ValueError(f"Version with name '{name}' and analysis_type '{analysis_type}' already exists")
 
         # Insert new version
         with db.cursor() as cur:
             cur.execute(
                 f"""
                 INSERT INTO {schema}.result_versions
-                (name, description, configuration)
-                VALUES (%s, %s, %s)
+                (name, description, configuration, analysis_type)
+                VALUES (%s, %s, %s, %s)
                 RETURNING id
                 """,
-                (name, description, json.dumps(configuration))
+                (name, description, json.dumps(configuration), analysis_type)
             )
             result = cur.fetchone()
             return str(result["id"])
@@ -117,7 +192,7 @@ def get_version(version_id: str) -> Optional[Dict[str, Any]]:
         with db.cursor() as cur:
             cur.execute(
                 f"""
-                SELECT id, name, description, configuration, is_complete,
+                SELECT id, name, description, configuration, analysis_type, is_complete,
                        pipeline_status, created_at, updated_at
                 FROM {schema}.result_versions
                 WHERE id = %s
@@ -131,6 +206,7 @@ def get_version(version_id: str) -> Optional[Dict[str, Any]]:
                     "name": row["name"],
                     "description": row["description"],
                     "configuration": row["configuration"],
+                    "analysis_type": row["analysis_type"],
                     "is_complete": row["is_complete"],
                     "pipeline_status": row["pipeline_status"],
                     "created_at": row["created_at"],
@@ -139,12 +215,13 @@ def get_version(version_id: str) -> Optional[Dict[str, Any]]:
             return None
 
 
-def get_version_by_name(name: str) -> Optional[Dict[str, Any]]:
+def get_version_by_name(name: str, analysis_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Get version metadata by name.
 
     Args:
         name: Name of the version
+        analysis_type: Optional filter by analysis type ('topics', 'clustering', 'combined')
 
     Returns:
         Dictionary with version metadata or None if not found
@@ -152,15 +229,26 @@ def get_version_by_name(name: str) -> Optional[Dict[str, Any]]:
     with Database() as db:
         schema = db.config["schema"]
         with db.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT id, name, description, configuration, is_complete,
-                       pipeline_status, created_at, updated_at
-                FROM {schema}.result_versions
-                WHERE name = %s
-                """,
-                (name,)
-            )
+            if analysis_type:
+                cur.execute(
+                    f"""
+                    SELECT id, name, description, configuration, analysis_type, is_complete,
+                           pipeline_status, created_at, updated_at
+                    FROM {schema}.result_versions
+                    WHERE name = %s AND analysis_type = %s
+                    """,
+                    (name, analysis_type)
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT id, name, description, configuration, analysis_type, is_complete,
+                           pipeline_status, created_at, updated_at
+                    FROM {schema}.result_versions
+                    WHERE name = %s
+                    """,
+                    (name,)
+                )
             row = cur.fetchone()
             if row:
                 return {
@@ -168,6 +256,7 @@ def get_version_by_name(name: str) -> Optional[Dict[str, Any]]:
                     "name": row["name"],
                     "description": row["description"],
                     "configuration": row["configuration"],
+                    "analysis_type": row["analysis_type"],
                     "is_complete": row["is_complete"],
                     "pipeline_status": row["pipeline_status"],
                     "created_at": row["created_at"],
@@ -176,9 +265,12 @@ def get_version_by_name(name: str) -> Optional[Dict[str, Any]]:
             return None
 
 
-def list_versions() -> List[Dict[str, Any]]:
+def list_versions(analysis_type: Optional[str] = None) -> List[Dict[str, Any]]:
     """
-    List all versions.
+    List all versions, optionally filtered by analysis type.
+
+    Args:
+        analysis_type: Optional filter by analysis type ('topics', 'clustering', 'combined')
 
     Returns:
         List of dictionaries with version metadata
@@ -186,14 +278,26 @@ def list_versions() -> List[Dict[str, Any]]:
     with Database() as db:
         schema = db.config["schema"]
         with db.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT id, name, description, configuration, is_complete,
-                       pipeline_status, created_at, updated_at
-                FROM {schema}.result_versions
-                ORDER BY created_at DESC
-                """
-            )
+            if analysis_type:
+                cur.execute(
+                    f"""
+                    SELECT id, name, description, configuration, analysis_type, is_complete,
+                           pipeline_status, created_at, updated_at
+                    FROM {schema}.result_versions
+                    WHERE analysis_type = %s
+                    ORDER BY created_at DESC
+                    """,
+                    (analysis_type,)
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT id, name, description, configuration, analysis_type, is_complete,
+                           pipeline_status, created_at, updated_at
+                    FROM {schema}.result_versions
+                    ORDER BY created_at DESC
+                    """
+                )
             rows = cur.fetchall()
             return [
                 {
@@ -201,6 +305,7 @@ def list_versions() -> List[Dict[str, Any]]:
                     "name": row["name"],
                     "description": row["description"],
                     "configuration": row["configuration"],
+                    "analysis_type": row["analysis_type"],
                     "is_complete": row["is_complete"],
                     "pipeline_status": row["pipeline_status"],
                     "created_at": row["created_at"],
@@ -210,12 +315,13 @@ def list_versions() -> List[Dict[str, Any]]:
             ]
 
 
-def find_version_by_config(configuration: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def find_version_by_config(configuration: Dict[str, Any], analysis_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Find a version with matching configuration.
 
     Args:
         configuration: Configuration dictionary to match
+        analysis_type: Optional filter by analysis type ('topics', 'clustering', 'combined')
 
     Returns:
         Dictionary with version metadata or None if no match found
@@ -223,15 +329,26 @@ def find_version_by_config(configuration: Dict[str, Any]) -> Optional[Dict[str, 
     with Database() as db:
         schema = db.config["schema"]
         with db.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT id, name, description, configuration, is_complete,
-                       pipeline_status, created_at, updated_at
-                FROM {schema}.result_versions
-                WHERE configuration = %s::jsonb
-                """,
-                (json.dumps(configuration),)
-            )
+            if analysis_type:
+                cur.execute(
+                    f"""
+                    SELECT id, name, description, configuration, analysis_type, is_complete,
+                           pipeline_status, created_at, updated_at
+                    FROM {schema}.result_versions
+                    WHERE configuration = %s::jsonb AND analysis_type = %s
+                    """,
+                    (json.dumps(configuration), analysis_type)
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT id, name, description, configuration, analysis_type, is_complete,
+                           pipeline_status, created_at, updated_at
+                    FROM {schema}.result_versions
+                    WHERE configuration = %s::jsonb
+                    """,
+                    (json.dumps(configuration),)
+                )
             row = cur.fetchone()
             if row:
                 return {
@@ -239,6 +356,7 @@ def find_version_by_config(configuration: Dict[str, Any]) -> Optional[Dict[str, 
                     "name": row["name"],
                     "description": row["description"],
                     "configuration": row["configuration"],
+                    "analysis_type": row["analysis_type"],
                     "is_complete": row["is_complete"],
                     "pipeline_status": row["pipeline_status"],
                     "created_at": row["created_at"],
@@ -282,14 +400,27 @@ def update_pipeline_status(
                 (f'{{{step}}}', json.dumps(complete), version_id)
             )
 
-            # Check if all steps are complete and update is_complete
+            # Check if all relevant steps are complete based on analysis_type and update is_complete
+            # For 'topics': check embeddings + topics
+            # For 'clustering': check embeddings + clustering
+            # For 'combined': check all three (backward compatibility)
             cur.execute(
                 f"""
                 UPDATE {schema}.result_versions
                 SET is_complete = (
-                    (pipeline_status->>'embeddings')::boolean AND
-                    (pipeline_status->>'topics')::boolean AND
-                    (pipeline_status->>'clustering')::boolean
+                    CASE analysis_type
+                        WHEN 'topics' THEN
+                            (pipeline_status->>'embeddings')::boolean AND
+                            (pipeline_status->>'topics')::boolean
+                        WHEN 'clustering' THEN
+                            (pipeline_status->>'embeddings')::boolean AND
+                            (pipeline_status->>'clustering')::boolean
+                        WHEN 'combined' THEN
+                            (pipeline_status->>'embeddings')::boolean AND
+                            (pipeline_status->>'topics')::boolean AND
+                            (pipeline_status->>'clustering')::boolean
+                        ELSE FALSE
+                    END
                 )
                 WHERE id = %s
                 """,
