@@ -18,6 +18,13 @@ hdbscan>=0.8.33
 
 # NLP
 nltk>=3.8.1
+transformers>=4.36.0
+torch>=2.1.0
+scipy>=1.11.0
+
+# Sentiment Analysis Models
+vaderSentiment>=3.3.2
+textblob>=0.17.1
 
 # Data & Viz
 numpy>=1.26.0
